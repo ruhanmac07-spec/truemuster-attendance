@@ -38,3 +38,34 @@ export function isAttemptWithinDeadline(startedAt: string, deadlineAt: string, n
   if (duration !== 45) return false;
   return now <= deadlineTime;
 }
+
+// 24-hour teacher window and 7-day admin window policy validator
+export function isCorrectionPermitted(
+  role: 'teacher' | 'admin',
+  scheduledEnd: string,
+  now: number
+): { permitted: boolean; reason?: string } {
+  const endTime = new Date(scheduledEnd).getTime();
+  const hoursElapsed = (now - endTime) / (1000 * 60 * 60);
+
+  if (hoursElapsed < 0) {
+    return { permitted: true };
+  }
+
+  if (role === 'teacher') {
+    if (hoursElapsed <= 24) {
+      return { permitted: true };
+    }
+    return { permitted: false, reason: 'Teacher correction window expired (24-hour limit exceeded). Escalated to Admin queue.' };
+  }
+
+  if (role === 'admin') {
+    if (hoursElapsed <= 24 * 7) {
+      return { permitted: true };
+    }
+    return { permitted: false, reason: 'Standard Admin correction window expired (7-day limit exceeded). Dual-approval exceptional override required.' };
+  }
+
+  return { permitted: false, reason: 'Unauthorized role' };
+}
+

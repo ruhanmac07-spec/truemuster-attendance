@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TrueMusterStore, INITIAL_STUDENT, TrueMusterApiClient } from './index';
-import { calculateDistanceMetres, isQRChallengeValid, isAttemptWithinDeadline } from './rules';
+import { calculateDistanceMetres, isQRChallengeValid, isAttemptWithinDeadline, isCorrectionPermitted } from './rules';
 
 describe('TRUEMUSTER Core Attendance Domain Rules', () => {
   it('validates that QR challenges have exactly 90 seconds of validity', () => {
@@ -191,6 +191,42 @@ describe('TRUEMUSTER Core Attendance Domain Rules', () => {
       expect(adjusted.verificationMethod).toBe('teacher_manual_override');
     });
   });
+
+  describe('Attendance Finalization and Correction Window Policies', () => {
+    const sessionEndBase = 1700000000000;
+    const scheduledEnd = new Date(sessionEndBase).toISOString();
+
+    it('permits teacher adjustment within 24 hours of session scheduled end', () => {
+      // 12 hours after session end
+      const now12h = sessionEndBase + 12 * 60 * 60 * 1000;
+      const res = isCorrectionPermitted('teacher', scheduledEnd, now12h);
+      expect(res.permitted).toBe(true);
+    });
+
+    it('rejects teacher adjustment after 24 hours and escalates to admin queue', () => {
+      // 25 hours after session end
+      const now25h = sessionEndBase + 25 * 60 * 60 * 1000;
+      const res = isCorrectionPermitted('teacher', scheduledEnd, now25h);
+      expect(res.permitted).toBe(false);
+      expect(res.reason).toContain('Teacher correction window expired (24-hour limit exceeded)');
+    });
+
+    it('permits admin adjustment within 7 calendar days', () => {
+      // 4 days after session end
+      const now4d = sessionEndBase + 4 * 24 * 60 * 60 * 1000;
+      const res = isCorrectionPermitted('admin', scheduledEnd, now4d);
+      expect(res.permitted).toBe(true);
+    });
+
+    it('requires dual-approval exceptional override after 7 calendar days for admin', () => {
+      // 8 days after session end
+      const now8d = sessionEndBase + 8 * 24 * 60 * 60 * 1000;
+      const res = isCorrectionPermitted('admin', scheduledEnd, now8d);
+      expect(res.permitted).toBe(false);
+      expect(res.reason).toContain('7-day limit exceeded');
+    });
+  });
 });
+
 
 

@@ -10,5 +10,6 @@
     "forceConsistentCasingInFileNames": true,
     "declaration": true,
     "jsx": "react-jsx"
-  }
+  },
+  "exclude": ["supabase", "node_modules", "dist"]
 }
