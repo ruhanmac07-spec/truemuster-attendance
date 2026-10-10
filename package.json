@@ -12,7 +12,7 @@
     "dev:admin": "npm run dev --workspace=apps/admin-windows",
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",
-    "test": "npm run test --workspaces"
+    "test": "vitest run"
   },
   "devDependencies": {
     "typescript": "^5.6.3",

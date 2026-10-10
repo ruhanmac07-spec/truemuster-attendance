@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { TrueMusterStore, INITIAL_STUDENT } from './index';
 
 // Haversine distance calculator
 export function calculateDistanceMetres(
@@ -82,4 +83,56 @@ describe('TRUEMUSTER Core Attendance Domain Rules', () => {
     const distOutside = calculateDistanceMetres(anchorLat, anchorLng, outsideLat, outsideLng);
     expect(distOutside).toBeGreaterThan(100);
   });
+
+  it('manages challenge issuance with 90s validity window in TrueMusterStore', () => {
+    // Mock localStorage for test environment
+    const storage: Record<string, string> = {};
+    global.localStorage = {
+      getItem: (key: string) => storage[key] || null,
+      setItem: (key: string, val: string) => { storage[key] = val; },
+      removeItem: (key: string) => { delete storage[key]; },
+      clear: () => { Object.keys(storage).forEach(k => delete storage[k]); },
+      key: (i: number) => Object.keys(storage)[i] || null,
+      length: Object.keys(storage).length,
+    } as any;
+
+    const challenge = TrueMusterStore.issueNewChallenge('ses-test-101');
+    expect(challenge.sessionId).toBe('ses-test-101');
+    expect(challenge.token).toContain('TM-');
+
+    const issueTime = new Date(challenge.issuedAt).getTime();
+    const expiryTime = new Date(challenge.expiresAt).getTime();
+    expect((expiryTime - issueTime) / 1000).toBe(90);
+
+    const retrieved = TrueMusterStore.getActiveChallenge();
+    expect(retrieved?.id).toBe(challenge.id);
+  });
+
+  it('atomically records student check-in and updates attendance count in TrueMusterStore', () => {
+    const session = TrueMusterStore.getSession();
+    const initialPresent = session.totalPresent;
+
+    TrueMusterStore.markAttendance({
+      id: 'rec-test-alice',
+      sessionId: session.id,
+      studentId: INITIAL_STUDENT.id,
+      studentName: INITIAL_STUDENT.fullName,
+      enrollmentId: INITIAL_STUDENT.enrollmentId,
+      courseCode: session.courseCode,
+      courseName: session.courseName,
+      sessionDate: new Date().toISOString().split('T')[0],
+      status: 'present',
+      verificationMethod: 'qr_biometric_geofence',
+      verifiedAt: new Date().toISOString(),
+    });
+
+    const records = TrueMusterStore.getRecords(session.id);
+    const aliceRecord = records.find(r => r.studentId === INITIAL_STUDENT.id);
+    expect(aliceRecord).toBeDefined();
+    expect(aliceRecord?.status).toBe('present');
+
+    const updatedSession = TrueMusterStore.getSession();
+    expect(updatedSession.totalPresent).toBe(records.filter(r => r.status === 'present').length);
+  });
 });
+
