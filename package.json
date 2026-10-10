@@ -12,6 +12,8 @@
     "dev:student:https": "USE_HTTPS=true npm run dev --workspace=apps/student-android",
     "dev:admin": "npm run dev --workspace=apps/admin-windows",
     "build": "npm run build --workspaces",
+    "build:android": "npm run build:android --workspace=apps/student-android",
+    "build:windows": "npm run build --workspace=apps/admin-windows",
     "typecheck": "npm run typecheck --workspaces",
     "test": "vitest run"
   },

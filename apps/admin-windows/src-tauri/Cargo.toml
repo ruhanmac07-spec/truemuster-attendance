@@ -1,0 +1,18 @@
+[package]
+name = "truemuster-admin"
+version = "1.0.0"
+description = "TRUEMUSTER Windows Admin & Teacher Desktop Application"
+authors = ["TrueMuster Team"]
+edition = "2021"
+
+[lib]
+name = "truemuster_admin_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

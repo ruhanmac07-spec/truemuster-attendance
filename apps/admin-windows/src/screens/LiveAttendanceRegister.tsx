@@ -52,6 +52,27 @@ export const LiveAttendanceRegister: React.FC<Props> = ({
 
   const presentCount = mergedRoster.filter(r => r.status === 'present').length;
 
+  const handleExportCSV = () => {
+    const headers = ['Enrollment ID', 'Student Name', 'Status', 'Method', 'Verified At'];
+    const rows = mergedRoster.map(item => [
+      item.enrollmentId,
+      `"${item.name}"`,
+      item.status.toUpperCase(),
+      item.method || 'N/A',
+      item.verifiedAt || 'N/A'
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `TrueMuster_Attendance_${session.courseCode}_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div>
       {/* Top Navigation & Actions */}
@@ -89,6 +110,26 @@ export const LiveAttendanceRegister: React.FC<Props> = ({
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
+          <button
+            onClick={handleExportCSV}
+            style={{
+              height: 38,
+              padding: '0 16px',
+              borderRadius: Radii.control,
+              backgroundColor: '#FFFFFF',
+              color: Colors.brandNavy,
+              border: `1px solid ${Colors.borderDefault}`,
+              fontSize: '13px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}
+          >
+            <FileSpreadsheet size={16} /> Export CSV
+          </button>
+
           <button
             onClick={onOpenQR}
             style={{
