@@ -1,42 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { TrueMusterStore, INITIAL_STUDENT } from './index';
-
-// Haversine distance calculator
-export function calculateDistanceMetres(
-  lat1: number, lon1: number,
-  lat2: number, lon2: number
-): number {
-  const r = 6371000; // Earth radius in metres
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return r * c;
-}
-
-// 90s QR challenge validity checker
-export function isQRChallengeValid(issuedAt: string, expiresAt: string, now: number): boolean {
-  const expiryTime = new Date(expiresAt).getTime();
-  const issueTime = new Date(issuedAt).getTime();
-  const validityWindow = (expiryTime - issueTime) / 1000;
-  // Verify strictly 90-second validity window
-  if (validityWindow !== 90) return false;
-  return now <= expiryTime;
-}
-
-// 45s attempt deadline checker
-export function isAttemptWithinDeadline(startedAt: string, deadlineAt: string, now: number): boolean {
-  const deadlineTime = new Date(deadlineAt).getTime();
-  const startTime = new Date(startedAt).getTime();
-  const duration = (deadlineTime - startTime) / 1000;
-  // Verify strictly 45-second deadline
-  if (duration !== 45) return false;
-  return now <= deadlineTime;
-}
+import { TrueMusterStore, INITIAL_STUDENT, TrueMusterApiClient } from './index';
+import { calculateDistanceMetres, isQRChallengeValid, isAttemptWithinDeadline } from './rules';
 
 describe('TRUEMUSTER Core Attendance Domain Rules', () => {
   it('validates that QR challenges have exactly 90 seconds of validity', () => {
@@ -134,5 +98,99 @@ describe('TRUEMUSTER Core Attendance Domain Rules', () => {
     const updatedSession = TrueMusterStore.getSession();
     expect(updatedSession.totalPresent).toBe(records.filter(r => r.status === 'present').length);
   });
+
+  describe('TrueMusterApiClient End-to-End Protocol Verification', () => {
+    it('successfully processes full check-in flow within policy', async () => {
+      const client = new TrueMusterApiClient();
+      const session = await client.getSession();
+      const challenge = await client.issueQRChallenge(session.id);
+
+      // Student scans QR and starts check-in attempt
+      const attempt = await client.startCheckIn(session.id, challenge.token, INITIAL_STUDENT.id);
+      expect(attempt.status).toBe('attempt_accepted');
+      expect(attempt.challengeId).toBe(challenge.id);
+
+      // Student submits evidence: inside Lab 302 (19.0761, 72.8777, ~11m), biometric passed
+      const result = await client.submitVerification({
+        attemptId: attempt.id,
+        studentId: INITIAL_STUDENT.id,
+        deviceId: 'dev-pixel7-hw-01',
+        latitude: 19.0761,
+        longitude: 72.8777,
+        accuracyMetres: 8.5,
+        gpsTimestamp: new Date().toISOString(),
+        biometricSuccess: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.status).toBe('confirmed');
+      expect(result.attendanceRecord?.status).toBe('present');
+    });
+
+    it('rejects attempt if location is outside 100m geofence', async () => {
+      const client = new TrueMusterApiClient();
+      const session = await client.getSession();
+      const challenge = await client.issueQRChallenge(session.id);
+
+      const attempt = await client.startCheckIn(session.id, challenge.token, INITIAL_STUDENT.id);
+
+      // Off-campus coordinates (>300m away)
+      const result = await client.submitVerification({
+        attemptId: attempt.id,
+        studentId: INITIAL_STUDENT.id,
+        deviceId: 'dev-pixel7-hw-01',
+        latitude: 19.0800,
+        longitude: 72.8777,
+        accuracyMetres: 12.0,
+        gpsTimestamp: new Date().toISOString(),
+        biometricSuccess: true,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('out_of_bounds');
+      expect(result.message).toContain('exceeds 100m classroom boundary');
+    });
+
+    it('rejects attempt if biometric authentication failed', async () => {
+      const client = new TrueMusterApiClient();
+      const session = await client.getSession();
+      const challenge = await client.issueQRChallenge(session.id);
+
+      const attempt = await client.startCheckIn(session.id, challenge.token, INITIAL_STUDENT.id);
+
+      const result = await client.submitVerification({
+        attemptId: attempt.id,
+        studentId: INITIAL_STUDENT.id,
+        deviceId: 'dev-pixel7-hw-01',
+        latitude: 19.0760,
+        longitude: 72.8777,
+        accuracyMetres: 5.0,
+        gpsTimestamp: new Date().toISOString(),
+        biometricSuccess: false,
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('auth_failed');
+    });
+
+    it('allows teacher manual adjustment with mandatory reason code', async () => {
+      const client = new TrueMusterApiClient();
+      const session = await client.getSession();
+
+      const adjusted = await client.adjustRecord({
+        recordId: 'rec-01',
+        sessionId: session.id,
+        studentId: 'stu-9902-bob',
+        newStatus: 'excused',
+        reasonCategory: 'medical',
+        reasonText: 'Presented signed medical certificate from campus clinic',
+      }, 'tch-prof-rao');
+
+      expect(adjusted.status).toBe('excused');
+      expect(adjusted.overrideReason).toBe('medical: Presented signed medical certificate from campus clinic');
+      expect(adjusted.verificationMethod).toBe('teacher_manual_override');
+    });
+  });
 });
+
 
