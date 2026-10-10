@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "dev:student": "npm run dev --workspace=apps/student-android",
+    "dev:student:https": "USE_HTTPS=true npm run dev --workspace=apps/student-android",
     "dev:admin": "npm run dev --workspace=apps/admin-windows",
     "build": "npm run build --workspaces",
     "typecheck": "npm run typecheck --workspaces",

@@ -166,4 +166,5 @@ export interface CheckInResult {
 export * from './store';
 export * from './rules';
 export * from './apiClient';
+export * from './supabaseClient';
 
