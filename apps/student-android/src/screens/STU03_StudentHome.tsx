@@ -1,13 +1,13 @@
 import React from 'react';
 import { Colors, Spacing, Radii } from '@truemuster/design-tokens';
 import { AttendanceSession, StudentProfile } from '@truemuster/domain-contracts';
-import { QrCode, Clock, MapPin, CheckCircle2, AlertCircle, ChevronRight, BookOpen } from 'lucide-react';
+import { QrCode, Clock, MapPin, CheckCircle2, AlertCircle, ChevronRight, BookOpen, UserCheck } from 'lucide-react';
 
 interface Props {
   student: StudentProfile;
   session: AttendanceSession;
   isMarkedPresent: boolean;
-  onOpenScanner: () => void;
+  onOpenScanner: (mode?: 'environment' | 'user') => void;
   onOpenHistory: () => void;
 }
 
@@ -207,27 +207,51 @@ export const STU03_StudentHome: React.FC<Props> = ({
                 <CheckCircle2 size={18} /> Attendance Recorded & Verified
               </div>
             ) : (
-              <button
-                onClick={onOpenScanner}
-                style={{
-                  width: '100%',
-                  height: Spacing.minTouchTarget,
-                  backgroundColor: Colors.brandNavy,
-                  color: Colors.textInverse,
-                  borderRadius: Radii.button,
-                  fontSize: '15px',
-                  fontWeight: 600,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 10,
-                  border: 'none',
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 6px rgba(0, 28, 90, 0.15)',
-                }}
-              >
-                <QrCode size={20} /> Scan Classroom QR to Check In
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <button
+                  onClick={() => onOpenScanner('environment')}
+                  style={{
+                    width: '100%',
+                    height: Spacing.minTouchTarget,
+                    backgroundColor: Colors.brandNavy,
+                    color: Colors.textInverse,
+                    borderRadius: Radii.button,
+                    fontSize: '15px',
+                    fontWeight: 600,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    border: 'none',
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 6px rgba(0, 28, 90, 0.15)',
+                  }}
+                >
+                  <QrCode size={20} /> Scan Classroom QR to Check In
+                </button>
+
+                <button
+                  onClick={() => onOpenScanner('user')}
+                  style={{
+                    width: '100%',
+                    height: Spacing.minTouchTarget,
+                    backgroundColor: '#0F274A',
+                    color: '#38BDF8',
+                    border: '1.5px solid #38BDF8',
+                    borderRadius: Radii.button,
+                    fontSize: '14px',
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 10,
+                    cursor: 'pointer',
+                    boxShadow: '0 2px 8px rgba(56, 189, 248, 0.15)',
+                  }}
+                >
+                  <UserCheck size={18} /> Real-Time Face & Biometric Verification
+                </button>
+              </div>
             )}
           </div>
         </div>

@@ -14,6 +14,7 @@ export default function App() {
   const [isDeviceBound, setIsDeviceBound] = useState(true); // default bound
   const [activeTab, setActiveTab] = useState<StudentTab>('home');
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerMode, setScannerMode] = useState<'environment' | 'user'>('environment');
   const [outcomeData, setOutcomeData] = useState<{ isSuccess: boolean; record?: AttendanceRecord; failureReason?: string } | null>(null);
 
   const [session, setSession] = useState<AttendanceSession>(TrueMusterStore.getSession());
@@ -77,6 +78,7 @@ export default function App() {
     <div style={{ maxWidth: 480, margin: '0 auto', minHeight: '100vh', position: 'relative' }}>
       {isScannerOpen && (
         <STU04_LiveScanner
+          initialFacingMode={scannerMode}
           onClose={() => setIsScannerOpen(false)}
           onSuccess={handleScanSuccess}
           onFailure={handleScanFailure}
@@ -99,7 +101,10 @@ export default function App() {
               student={student}
               session={session}
               isMarkedPresent={isMarkedPresent}
-              onOpenScanner={() => setIsScannerOpen(true)}
+              onOpenScanner={(mode = 'environment') => {
+                setScannerMode(mode);
+                setIsScannerOpen(true);
+              }}
               onOpenHistory={() => setActiveTab('history')}
             />
           )}
