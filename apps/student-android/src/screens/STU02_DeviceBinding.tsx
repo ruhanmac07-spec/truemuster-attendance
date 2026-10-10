@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Colors, Spacing, Radii } from '@truemuster/design-tokens';
 import { Smartphone, Camera, MapPin, Fingerprint, ShieldCheck, CheckCircle2 } from 'lucide-react';
+import { authenticateNativeBiometric } from '../services/nativeBiometric';
 
 interface Props {
   onSuccess: () => void;
@@ -9,16 +10,32 @@ interface Props {
 export const STU02_DeviceBinding: React.FC<Props> = ({ onSuccess }) => {
   const [isBinding, setIsBinding] = useState(false);
   const [isBound, setIsBound] = useState(false);
+  const [enrollError, setEnrollError] = useState<string | null>(null);
 
-  const handleBindDevice = () => {
+  const handleBindDevice = async () => {
     setIsBinding(true);
+    setEnrollError(null);
+
+    // Prompt user to authorize cryptographic hardware binding
+    const auth = await authenticateNativeBiometric({
+      title: 'Authorize Device Binding',
+      subtitle: 'Enroll this Android device for Alice Sharma',
+      description: 'Touch sensor or enter PIN to bind device key in Keystore',
+    });
+
+    if (auth.isNative && !auth.authenticated) {
+      setIsBinding(false);
+      setEnrollError(auth.errorMessage || 'Device authorization was cancelled.');
+      return;
+    }
+
     setTimeout(() => {
       setIsBinding(false);
       setIsBound(true);
       setTimeout(() => {
         onSuccess();
       }, 700);
-    }, 1000);
+    }, 600);
   };
 
   return (
@@ -190,6 +207,20 @@ export const STU02_DeviceBinding: React.FC<Props> = ({ onSuccess }) => {
       </div>
 
       <div style={{ marginTop: Spacing.xl }}>
+        {enrollError && (
+          <div style={{
+            backgroundColor: '#FEE2E2',
+            color: '#B91C1C',
+            padding: '10px 14px',
+            borderRadius: Radii.control,
+            fontSize: '13px',
+            fontWeight: 600,
+            marginBottom: Spacing.md,
+            border: '1px solid #F87171',
+          }}>
+            {enrollError}
+          </div>
+        )}
         <button
           onClick={handleBindDevice}
           disabled={isBinding || isBound}

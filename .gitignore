@@ -6,7 +6,17 @@ node_modules/
 # Build artifacts
 dist/
 build/
+target/
 *.tsbuildinfo
+*.apk
+*.aab
+*.msi
+*.exe
+.gradle/
+**/android/.gradle/
+**/android/build/
+**/android/app/build/
+**/android/local.properties
 
 # Environment and secrets
 .env

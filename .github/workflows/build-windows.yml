@@ -1,0 +1,57 @@
+name: Build Windows Desktop Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'apps/admin-windows/**'
+      - 'packages/**'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build-windows:
+    name: Build Tauri Windows x64 Desktop Installer
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust Stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Monorepo Dependencies
+        run: npm ci
+
+      - name: Build Admin Web Bundle
+        run: npm run build:windows
+
+      - name: Build Tauri Desktop Binary and Installer
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: './apps/admin-windows'
+          tagName: v__VERSION__
+          releaseName: 'TRUEMUSTER Desktop v__VERSION__'
+          releaseBody: 'Automated release of TRUEMUSTER Admin & Teacher Desktop Application for Windows.'
+          releaseDraft: true
+          prerelease: false
+
+      - name: Upload Windows MSI Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrueMuster-Windows-Installer
+          path: |
+            apps/admin-windows/src-tauri/target/release/bundle/msi/*.msi
+            apps/admin-windows/src-tauri/target/release/*.exe
+          if-no-files-found: warn

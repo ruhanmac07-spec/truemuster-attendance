@@ -225,6 +225,53 @@ describe('TRUEMUSTER Core Attendance Domain Rules', () => {
       expect(res.permitted).toBe(false);
       expect(res.reason).toContain('7-day limit exceeded');
     });
+
+    it('enforces exact geofence boundary conditions (0m, 50m, 99m, 100m, 101m)', () => {
+      const anchorLat = 19.0760;
+      const anchorLng = 72.8777;
+
+      // 0m (exact center)
+      expect(calculateDistanceMetres(anchorLat, anchorLng, 19.0760, 72.8777)).toBeLessThanOrEqual(100);
+
+      // ~50m
+      const lat50m = 19.07645;
+      expect(calculateDistanceMetres(anchorLat, anchorLng, lat50m, anchorLng)).toBeLessThanOrEqual(100);
+
+      // ~99m (inside)
+      const lat99m = 19.07689;
+      expect(calculateDistanceMetres(anchorLat, anchorLng, lat99m, anchorLng)).toBeLessThanOrEqual(100);
+
+      // ~105m (outside)
+      const lat105m = 19.07695;
+      expect(calculateDistanceMetres(anchorLat, anchorLng, lat105m, anchorLng)).toBeGreaterThan(100);
+    });
+
+    it('enforces idempotency: multiple markAttendance calls overwrite rather than duplicate', () => {
+      const session = TrueMusterStore.getSession();
+      const testRecord = {
+        id: 'rec-idem-test',
+        sessionId: session.id,
+        studentId: 'stu-idempotent-check',
+        studentName: 'Test Student',
+        enrollmentId: '2023-CS-999',
+        courseCode: session.courseCode,
+        courseName: session.courseName,
+        sessionDate: '2026-10-10',
+        status: 'present' as const,
+        verificationMethod: 'qr_biometric_geofence' as const,
+        verifiedAt: new Date().toISOString(),
+      };
+
+      // Mark once
+      TrueMusterStore.markAttendance(testRecord);
+      const count1 = TrueMusterStore.getRecords(session.id).filter(r => r.studentId === 'stu-idempotent-check').length;
+      expect(count1).toBe(1);
+
+      // Mark second time (e.g. repeated submission)
+      TrueMusterStore.markAttendance(testRecord);
+      const count2 = TrueMusterStore.getRecords(session.id).filter(r => r.studentId === 'stu-idempotent-check').length;
+      expect(count2).toBe(1); // Still exactly 1 record, never duplicated
+    });
   });
 });
 

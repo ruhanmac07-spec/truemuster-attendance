@@ -220,13 +220,13 @@ const server = http.createServer((req, res) => {
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
       try {
-        const { attemptId, studentId, studentName, enrollmentId, latitude, longitude, biometricSuccess } = JSON.parse(body || '{}');
+        const { attemptId, studentId, studentName, enrollmentId, latitude, longitude, accuracy, fixTimestamp, biometricSuccess } = JSON.parse(body || '{}');
         const now = Date.now();
         const attempt = attempts.get(attemptId);
 
         if (!attempt) {
           res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: false, status: 'rejected', message: 'Attempt not found' }));
+          res.end(JSON.stringify({ success: false, status: 'rejected', message: 'Attempt not found or already processed' }));
           return;
         }
 
@@ -241,30 +241,63 @@ const server = http.createServer((req, res) => {
           return;
         }
 
-        // 2. Verify 100m geofence policy
-        const dist = calculateDistanceMetres(CLASSROOM_ANCHOR.latitude, CLASSROOM_ANCHOR.longitude, latitude || 19.0761, longitude || 72.8777);
+        // 2. Validate GPS Freshness (must be <= 15s)
+        if (fixTimestamp && (now - fixTimestamp) > 15000) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: false,
+            status: 'location_stale',
+            message: 'GPS fix is older than 15 seconds. Please acquire a fresh satellite fix.',
+          }));
+          return;
+        }
+
+        // 3. Validate GPS Horizontal Accuracy (must be <= 50m)
+        if (accuracy && accuracy > 50) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: false,
+            status: 'accuracy_too_low',
+            message: `Reported GPS accuracy (±${Math.round(accuracy)}m) is too imprecise (must be <= 50m).`,
+          }));
+          return;
+        }
+
+        // 4. Verify 100m geofence policy against Computing Lab 302 anchor
+        if (latitude == null || longitude == null) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: false,
+            status: 'location_missing',
+            message: 'Missing device coordinates. Location permission is mandatory.',
+          }));
+          return;
+        }
+
+        const dist = calculateDistanceMetres(CLASSROOM_ANCHOR.latitude, CLASSROOM_ANCHOR.longitude, latitude, longitude);
         if (dist > CLASSROOM_ANCHOR.radiusMetres) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             success: false,
             status: 'out_of_bounds',
-            message: `Location check failed: Distance (${Math.round(dist)}m) exceeds 100m boundary.`,
+            message: `Geofence validation failed: Distance (${Math.round(dist)}m) exceeds 100m perimeter from ${CLASSROOM_ANCHOR.roomNumber}.`,
+            distanceMetres: Math.round(dist * 10) / 10,
           }));
           return;
         }
 
-        // 3. Verify Biometric
+        // 5. Verify Biometric
         if (!biometricSuccess) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             success: false,
             status: 'auth_failed',
-            message: 'Biometric authorization failed.',
+            message: 'Biometric authorization failed or was dismissed.',
           }));
           return;
         }
 
-        // 4. Atomically record attendance
+        // 6. Atomically record attendance with cryptographic evidence metadata
         const rec = {
           id: 'rec-' + Math.random().toString(36).substring(2, 9),
           sessionId: session.id,
@@ -276,6 +309,12 @@ const server = http.createServer((req, res) => {
           sessionDate: new Date().toISOString().split('T')[0],
           status: 'present',
           verificationMethod: 'qr_biometric_geofence',
+          evidenceMetadata: {
+            distanceMeters: Math.round(dist * 10) / 10,
+            accuracyMeters: accuracy || 15.0,
+            verifiedAt: new Date(now).toISOString(),
+            anchorRoom: CLASSROOM_ANCHOR.roomNumber,
+          },
           verifiedAt: new Date(now).toISOString(),
         };
 

@@ -16,6 +16,7 @@
     "@capacitor/android": "^8.5.3",
     "@capacitor/cli": "^7.6.9",
     "@capacitor/core": "^8.5.3",
+    "@capacitor/geolocation": "^8.2.3",
     "@truemuster/design-tokens": "*",
     "@truemuster/domain-contracts": "*",
     "jsqr": "^1.4.0",
