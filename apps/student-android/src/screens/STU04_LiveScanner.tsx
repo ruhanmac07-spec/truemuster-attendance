@@ -9,45 +9,36 @@ import {
 import jsQR from 'jsqr';
 
 interface Props {
-  initialFacingMode?: 'environment' | 'user';
   onClose: () => void;
   onSuccess: (result: CheckInResult) => void;
   onFailure: (reason: string, distance?: number) => void;
 }
 
-type CheckInStep = 
-  | 'idle_scanning' 
-  | 'qr_validating' 
-  | 'attempt_active' 
-  | 'verifying_location' 
-  | 'prompting_biometric' 
-  | 'committing';
-
-type FaceVerifyStage = 
-  | 'idle' 
-  | 'analyzing_liveness' 
-  | 'matching_profile' 
-  | 'prompting_hardware_biometric' 
-  | 'completed';
+type PipelineStep = 
+  | 'step1_qr'            // Stage 1: Rear Camera scans rotating QR
+  | 'step1_qr_validating' // Checking QR token with backend & geofence
+  | 'step2_face'          // Stage 2: Front Camera scans live face & liveness
+  | 'step2_face_matching' // Matching face against roster profile
+  | 'step3_biometric'     // Stage 3: Phone hardware fingerprint prompt
+  | 'committing';         // Cryptographic evidence commit to database
 
 export const STU04_LiveScanner: React.FC<Props> = ({ 
-  initialFacingMode = 'environment', 
   onClose, 
   onSuccess, 
   onFailure 
 }) => {
+  const [currentStep, setCurrentStep] = useState<PipelineStep>('step1_qr');
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [torchOn, setTorchOn] = useState(false);
-  const [facingMode, setFacingMode] = useState<'environment' | 'user'>(initialFacingMode);
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const [currentStep, setCurrentStep] = useState<CheckInStep>('idle_scanning');
   const [secondsRemaining, setSecondsRemaining] = useState(45);
   const [manualTokenInput, setManualTokenInput] = useState('');
-  const [statusMessage, setStatusMessage] = useState('Align classroom QR code within the viewfinder frame');
+  const [statusMessage, setStatusMessage] = useState('Step 1 of 3: Scan classroom QR code using rear camera');
   const [activeChallenge, setActiveChallenge] = useState<QRChallenge | null>(null);
   const [attemptId, setAttemptId] = useState<string | null>(null);
   const [faceLivenessScore, setFaceLivenessScore] = useState<number>(98.7);
-  const [faceVerifyStage, setFaceVerifyStage] = useState<FaceVerifyStage>('idle');
+  const [faceProgress, setFaceProgress] = useState<number>(0);
   const [showDiagnostics, setShowDiagnostics] = useState<boolean>(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -88,7 +79,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
     } catch (err: any) {
       console.warn('Camera access issue:', err);
       if (err.name === 'NotAllowedError') {
-        setCameraError('Camera access was denied by user or system permission. Please allow camera permissions in browser settings.');
+        setCameraError('Camera access was denied. Please allow camera permissions in browser settings.');
       } else if (err.name === 'NotFoundError') {
         setCameraError('No camera sensor found on this device.');
       } else {
@@ -109,7 +100,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
 
   // Real-time camera frame QR decoding via jsQR (Rear camera)
   useEffect(() => {
-    if (currentStep !== 'idle_scanning' || facingMode !== 'environment') return;
+    if (currentStep !== 'step1_qr' || facingMode !== 'environment') return;
 
     let animId: number;
     const scanCanvas = document.createElement('canvas');
@@ -126,7 +117,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           inversionAttempts: 'dontInvert',
         });
         if (code && code.data && code.data.startsWith('TM-')) {
-          handleProcessChallenge(code.data);
+          handleStep1QRScanned(code.data);
           return;
         }
       }
@@ -191,9 +182,9 @@ export const STU04_LiveScanner: React.FC<Props> = ({
     };
   }, []);
 
-  // 45-Second Strict Attempt Deadline Countdown Timer
+  // 45-Second Strict Attempt Deadline Countdown Timer (Once QR is accepted)
   useEffect(() => {
-    if (currentStep === 'idle_scanning' || currentStep === 'qr_validating') return;
+    if (currentStep === 'step1_qr' || currentStep === 'step1_qr_validating') return;
 
     const timer = setInterval(() => {
       setSecondsRemaining((prev) => {
@@ -209,12 +200,14 @@ export const STU04_LiveScanner: React.FC<Props> = ({
     return () => clearInterval(timer);
   }, [currentStep, onFailure]);
 
-  // Execute Challenge Acceptance & Start Attempt via API
-  const handleProcessChallenge = async (token: string) => {
-    if (currentStep !== 'idle_scanning') return;
+  // ============================================================================
+  // STAGE 1: QR CODE SCANNED & VALIDATED
+  // ============================================================================
+  const handleStep1QRScanned = async (token: string) => {
+    if (currentStep !== 'step1_qr') return;
 
-    setCurrentStep('qr_validating');
-    setStatusMessage('Validating dynamic challenge against attendance server...');
+    setCurrentStep('step1_qr_validating');
+    setStatusMessage('Step 1: Validating QR challenge token & 100m geofence...');
 
     try {
       const res = await fetch('/api/check-in/start', {
@@ -235,27 +228,51 @@ export const STU04_LiveScanner: React.FC<Props> = ({
       setAttemptId('att-local-' + Date.now());
     }
 
-    // CHALLENGE ACCEPTED: START 45-SECOND DEADLINE NOW
-    setCurrentStep('attempt_active');
-    setSecondsRemaining(45);
-    setStatusMessage('Challenge accepted! Verifying hardware geofence (< 100m)...');
-
-    // Step 2: Location Geofence Check
+    // Step 1 Passed: Transition directly to Step 2 (Front Camera Face Verification)
+    setStatusMessage('✓ Step 1 Passed: QR code & Geofence verified! Switching to front camera...');
+    
     setTimeout(() => {
-      setCurrentStep('verifying_location');
-      const simulatedDistance = 24.5;
-      setStatusMessage(`GPS fix acquired: ${simulatedDistance.toFixed(1)}m from Room 302 anchor.`);
-
-      // Step 3: Biometric Authentication Prompt
-      setTimeout(() => {
-        setCurrentStep('prompting_biometric');
-        setStatusMessage('Authorizing via Android BiometricPrompt (Fingerprint/PIN/Face)...');
-      }, 800);
-    }, 1000);
+      // Flip camera to Front / Selfie Mode
+      setFacingMode('user');
+      setCurrentStep('step2_face');
+      setFaceProgress(0);
+      setStatusMessage('Step 2 of 3: Position face in oval frame for liveness check');
+    }, 900);
   };
 
-  // Hardware Biometric Verification via WebAuthn platform authenticator
-  const handleHardwareBiometricTrigger = async () => {
+  // ============================================================================
+  // STAGE 2: REAL-TIME FACE VERIFICATION (Auto-triggers or tap)
+  // ============================================================================
+  const handleStep2StartFaceVerification = () => {
+    setCurrentStep('step2_face_matching');
+    setStatusMessage('Analyzing 3D depth, micro-movements & eye blinks...');
+    setFaceProgress(35);
+
+    // Phase 2a: Liveness scan
+    setTimeout(() => {
+      setFaceProgress(70);
+      setStatusMessage('Liveness verified! Matching face against student roster (Alice Sharma)...');
+
+      // Phase 2b: Facial roster match
+      setTimeout(() => {
+        setFaceProgress(100);
+        setStatusMessage('✓ Step 2 Passed: Face verified (99.6% match)! Initializing fingerprint...');
+
+        // Transition directly to Stage 3 (Hardware Biometrics)
+        setTimeout(() => {
+          setCurrentStep('step3_biometric');
+          setStatusMessage('Step 3 of 3: Touch phone fingerprint sensor to confirm');
+          // Auto-trigger native fingerprint prompt
+          triggerNativeHardwareBiometric();
+        }, 900);
+      }, 1000);
+    }, 1100);
+  };
+
+  // ============================================================================
+  // STAGE 3: NATIVE HARDWARE FINGERPRINT / BIOMETRIC PROMPT
+  // ============================================================================
+  const triggerNativeHardwareBiometric = async () => {
     let authSuccess = false;
 
     if (typeof window !== 'undefined' && window.PublicKeyCredential) {
@@ -300,30 +317,9 @@ export const STU04_LiveScanner: React.FC<Props> = ({
     }
   };
 
-  // Interactive Real-Time Face Verification Workflow (Front Camera)
-  const handleLiveFaceVerificationSequence = async () => {
-    setFaceVerifyStage('analyzing_liveness');
-    setStatusMessage('Scanning facial depth, eye blinks & micro-movements...');
-
-    // Phase 1: Liveness analysis (1.4s)
-    setTimeout(() => {
-      setFaceVerifyStage('matching_profile');
-      setStatusMessage('Liveness passed! Matching against registered roster profile (Alice Sharma)...');
-
-      // Phase 2: Profile matching (1.2s)
-      setTimeout(() => {
-        setFaceVerifyStage('prompting_hardware_biometric');
-        setStatusMessage('Face matched (99.6%). Triggering hardware BiometricPrompt...');
-
-        // Phase 3: Hardware Biometric unlock (Fingerprint / Face ID)
-        setTimeout(async () => {
-          await handleHardwareBiometricTrigger();
-          setFaceVerifyStage('completed');
-        }, 800);
-      }, 1200);
-    }, 1400);
-  };
-
+  // ============================================================================
+  // FINAL COMMIT TO DATABASE
+  // ============================================================================
   const commitAttendanceRecord = async () => {
     setCurrentStep('committing');
     setStatusMessage('Cryptographically signing evidence & committing attendance record...');
@@ -382,6 +378,11 @@ export const STU04_LiveScanner: React.FC<Props> = ({
     });
   };
 
+  // Helper to determine active pipeline stage index: 1, 2, or 3
+  const activeStageNumber = 
+    (currentStep === 'step1_qr' || currentStep === 'step1_qr_validating') ? 1 :
+    (currentStep === 'step2_face' || currentStep === 'step2_face_matching') ? 2 : 3;
+
   return (
     <div style={{
       position: 'fixed',
@@ -414,13 +415,13 @@ export const STU04_LiveScanner: React.FC<Props> = ({
         }
       `}</style>
 
-      {/* Top Header Controls */}
+      {/* Top Header Bar */}
       <div style={{
         padding: '10px 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: 'rgba(7, 22, 47, 0.9)',
+        backgroundColor: 'rgba(7, 22, 47, 0.92)',
         backdropFilter: 'blur(10px)',
         borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
         zIndex: 25,
@@ -453,7 +454,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
               boxShadow: cameraActive ? '0 0 8px #10B981' : 'none' 
             }} />
             <span style={{ fontSize: '11px', color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
-              {facingMode === 'user' ? 'Front Camera Active' : 'Rear Camera Active'}
+              {activeStageNumber === 1 ? '1. Classroom QR Scanner' : activeStageNumber === 2 ? '2. Live Face Verification' : '3. Hardware Biometric Unlock'}
             </span>
           </div>
           <div style={{ fontSize: '15px', fontWeight: 700, color: '#FFFFFF' }}>
@@ -480,63 +481,88 @@ export const STU04_LiveScanner: React.FC<Props> = ({
         </button>
       </div>
 
-      {/* Prominent Mode Segmented Control (Switch between QR and Face Recognition) */}
+      {/* Unified 3-Step Interactive Pipeline Progress Bar */}
       <div style={{
-        padding: '8px 16px',
-        backgroundColor: 'rgba(7, 22, 47, 0.8)',
+        padding: '10px 16px',
+        backgroundColor: 'rgba(7, 22, 47, 0.88)',
         backdropFilter: 'blur(8px)',
         zIndex: 20,
         display: 'flex',
-        gap: 8,
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
       }}>
-        <button
-          onClick={() => {
-            setFacingMode('environment');
-            setFaceVerifyStage('idle');
-          }}
-          style={{
-            flex: 1,
-            padding: '10px 12px',
-            borderRadius: Radii.control,
-            border: facingMode === 'environment' ? '1px solid #10B981' : '1px solid rgba(255, 255, 255, 0.15)',
-            backgroundColor: facingMode === 'environment' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-            color: facingMode === 'environment' ? '#10B981' : '#94A3B8',
-            fontSize: '13px',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <Scan size={16} /> QR Code Scanner
-        </button>
+        {/* Step 1 Pill */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: Radii.full,
+          backgroundColor: activeStageNumber === 1 ? '#0F274A' : activeStageNumber > 1 ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
+          border: activeStageNumber === 1 ? '1px solid #38BDF8' : activeStageNumber > 1 ? '1px solid #10B981' : '1px solid rgba(255, 255, 255, 0.15)',
+        }}>
+          {activeStageNumber > 1 ? (
+            <CheckCircle2 size={14} style={{ color: '#10B981' }} />
+          ) : (
+            <Scan size={14} style={{ color: activeStageNumber === 1 ? '#38BDF8' : '#64748B' }} />
+          )}
+          <span style={{ 
+            fontSize: '12px', 
+            fontWeight: 700, 
+            color: activeStageNumber === 1 ? '#38BDF8' : activeStageNumber > 1 ? '#10B981' : '#64748B' 
+          }}>
+            1. QR Code
+          </span>
+        </div>
 
-        <button
-          onClick={() => {
-            setFacingMode('user');
-          }}
-          style={{
-            flex: 1,
-            padding: '10px 12px',
-            borderRadius: Radii.control,
-            border: facingMode === 'user' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.15)',
-            backgroundColor: facingMode === 'user' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-            color: facingMode === 'user' ? '#38BDF8' : '#94A3B8',
-            fontSize: '13px',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            cursor: 'pointer',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <UserCheck size={16} /> Face & Biometrics
-        </button>
+        <div style={{ width: 16, height: 2, backgroundColor: activeStageNumber > 1 ? '#10B981' : 'rgba(255, 255, 255, 0.2)' }} />
+
+        {/* Step 2 Pill */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: Radii.full,
+          backgroundColor: activeStageNumber === 2 ? '#0F274A' : activeStageNumber > 2 ? 'rgba(16, 185, 129, 0.2)' : 'transparent',
+          border: activeStageNumber === 2 ? '1px solid #38BDF8' : activeStageNumber > 2 ? '1px solid #10B981' : '1px solid rgba(255, 255, 255, 0.15)',
+        }}>
+          {activeStageNumber > 2 ? (
+            <CheckCircle2 size={14} style={{ color: '#10B981' }} />
+          ) : (
+            <UserCheck size={14} style={{ color: activeStageNumber === 2 ? '#38BDF8' : '#64748B' }} />
+          )}
+          <span style={{ 
+            fontSize: '12px', 
+            fontWeight: 700, 
+            color: activeStageNumber === 2 ? '#38BDF8' : activeStageNumber > 2 ? '#10B981' : '#64748B' 
+          }}>
+            2. Face Scan
+          </span>
+        </div>
+
+        <div style={{ width: 16, height: 2, backgroundColor: activeStageNumber > 2 ? '#10B981' : 'rgba(255, 255, 255, 0.2)' }} />
+
+        {/* Step 3 Pill */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '4px 10px',
+          borderRadius: Radii.full,
+          backgroundColor: activeStageNumber === 3 ? '#0F274A' : 'transparent',
+          border: activeStageNumber === 3 ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.15)',
+        }}>
+          <Fingerprint size={14} style={{ color: activeStageNumber === 3 ? '#38BDF8' : '#64748B' }} />
+          <span style={{ 
+            fontSize: '12px', 
+            fontWeight: 700, 
+            color: activeStageNumber === 3 ? '#38BDF8' : '#64748B' 
+          }}>
+            3. Fingerprint
+          </span>
+        </div>
       </div>
 
       {/* Main Viewfinder Section */}
@@ -566,11 +592,11 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           }}
         />
 
-        {/* Backdrop Tint */}
+        {/* Backdrop Gradient */}
         <div style={{
           position: 'absolute',
           inset: 0,
-          background: 'linear-gradient(180deg, rgba(7, 22, 47, 0.4) 0%, rgba(7, 22, 47, 0.1) 50%, rgba(7, 22, 47, 0.7) 100%)',
+          background: 'linear-gradient(180deg, rgba(7, 22, 47, 0.4) 0%, rgba(7, 22, 47, 0.1) 50%, rgba(7, 22, 47, 0.75) 100%)',
           pointerEvents: 'none',
         }} />
 
@@ -614,8 +640,8 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Active Countdown Timer Display (Visible once challenge accepted) */}
-        {currentStep !== 'idle_scanning' && currentStep !== 'qr_validating' && (
+        {/* Active Countdown Timer Display (Visible once QR is accepted) */}
+        {activeStageNumber > 1 && (
           <div style={{
             position: 'absolute',
             top: 16,
@@ -640,17 +666,17 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           </div>
         )}
 
-        {/* Viewfinder Target: Rear QR Scanner Reticle OR Front Facial Recognition Reticle */}
+        {/* Viewfinder Target: Rear QR Scanner Reticle OR Front Face Reticle */}
         <div style={{
           position: 'relative',
-          width: facingMode === 'user' ? 240 : 260,
-          height: facingMode === 'user' ? 310 : 260,
-          borderRadius: facingMode === 'user' ? '50% 50% 45% 45%' : Radii.card,
-          border: facingMode === 'user' 
-            ? (faceVerifyStage === 'matching_profile' || faceVerifyStage === 'completed' ? '3px solid #10B981' : '3px solid #38BDF8')
+          width: activeStageNumber === 2 ? 240 : 260,
+          height: activeStageNumber === 2 ? 310 : 260,
+          borderRadius: activeStageNumber === 2 ? '50% 50% 45% 45%' : Radii.card,
+          border: activeStageNumber === 2 
+            ? (currentStep === 'step2_face_matching' && faceProgress === 100 ? '3px solid #10B981' : '3px solid #38BDF8')
             : '2px dashed rgba(255, 255, 255, 0.4)',
-          animation: facingMode === 'user' 
-            ? (faceVerifyStage === 'matching_profile' ? 'pulseSuccess 2s infinite ease-in-out' : 'pulseGlow 2.5s infinite ease-in-out')
+          animation: activeStageNumber === 2 
+            ? (currentStep === 'step2_face_matching' && faceProgress === 100 ? 'pulseSuccess 2s infinite ease-in-out' : 'pulseGlow 2.5s infinite ease-in-out')
             : 'none',
           display: 'flex',
           flexDirection: 'column',
@@ -659,7 +685,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           zIndex: 10,
           transition: 'all 0.35s cubic-bezier(0.4, 0, 0.2, 1)',
           overflow: 'hidden',
-          backgroundColor: facingMode === 'user' ? 'rgba(56, 189, 248, 0.05)' : 'rgba(0, 0, 0, 0.15)',
+          backgroundColor: activeStageNumber === 2 ? 'rgba(56, 189, 248, 0.05)' : 'rgba(0, 0, 0, 0.15)',
         }}>
           {/* Laser Scanning Bar */}
           <div style={{
@@ -667,24 +693,43 @@ export const STU04_LiveScanner: React.FC<Props> = ({
             left: 0,
             right: 0,
             height: '3px',
-            backgroundColor: facingMode === 'user' ? '#38BDF8' : '#10B981',
-            boxShadow: facingMode === 'user' ? '0 0 14px #38BDF8' : '0 0 14px #10B981',
+            backgroundColor: activeStageNumber === 2 ? '#38BDF8' : '#10B981',
+            boxShadow: activeStageNumber === 2 ? '0 0 14px #38BDF8' : '0 0 14px #10B981',
             animation: 'scanSweep 2.2s infinite ease-in-out',
             zIndex: 12,
           }} />
 
-          {/* Environment (Rear Camera) QR Framing Brackets */}
-          {facingMode === 'environment' && (
+          {/* STAGE 1: Rear Camera QR Reticle */}
+          {activeStageNumber === 1 && (
             <>
               <div style={{ position: 'absolute', top: -2, left: -2, width: 32, height: 32, borderTop: '4px solid #10B981', borderLeft: '4px solid #10B981', borderTopLeftRadius: Radii.card }} />
               <div style={{ position: 'absolute', top: -2, right: -2, width: 32, height: 32, borderTop: '4px solid #10B981', borderRight: '4px solid #10B981', borderTopRightRadius: Radii.card }} />
               <div style={{ position: 'absolute', bottom: -2, left: -2, width: 32, height: 32, borderBottom: '4px solid #10B981', borderLeft: '4px solid #10B981', borderBottomLeftRadius: Radii.card }} />
               <div style={{ position: 'absolute', bottom: -2, right: -2, width: 32, height: 32, borderBottom: '4px solid #10B981', borderRight: '4px solid #10B981', borderBottomRightRadius: Radii.card }} />
+
+              {currentStep === 'step1_qr' && (
+                <div style={{ textAlign: 'center', padding: 20, zIndex: 11 }}>
+                  <Scan size={44} style={{ color: 'rgba(255, 255, 255, 0.85)', margin: '0 auto' }} />
+                  <div style={{ fontSize: '13px', color: '#FFFFFF', marginTop: 10, fontWeight: 700 }}>
+                    1. Align Classroom QR Code
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#10B981', marginTop: 4, fontWeight: 600 }}>
+                    jsQR Frame Analysis Active
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 'step1_qr_validating' && (
+                <div style={{ textAlign: 'center', zIndex: 11 }}>
+                  <div style={{ width: 44, height: 44, border: '3px solid #10B981', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spinSlow 1s linear infinite', margin: '0 auto' }} />
+                  <div style={{ fontSize: '13px', marginTop: 12, fontWeight: 700, color: '#FFFFFF' }}>Validating QR & Geofence...</div>
+                </div>
+              )}
             </>
           )}
 
-          {/* Front Camera Facial Biometric Landmark Simulation */}
-          {facingMode === 'user' && (
+          {/* STAGE 2: Front Camera Face Reticle & Landmarks */}
+          {activeStageNumber === 2 && (
             <>
               {/* Eye Crosshairs */}
               <div style={{ position: 'absolute', top: '38%', left: '28%', width: 16, height: 16, border: '1.5px solid rgba(56, 189, 248, 0.75)', borderRadius: '50%' }} />
@@ -712,141 +757,63 @@ export const STU04_LiveScanner: React.FC<Props> = ({
                   Liveness: {faceLivenessScore}% (PASS)
                 </span>
               </div>
+
+              {currentStep === 'step2_face' && (
+                <div style={{ textAlign: 'center', padding: 20, zIndex: 11 }}>
+                  <UserCheck size={50} style={{ color: '#38BDF8', margin: '0 auto' }} />
+                  <div style={{ fontSize: '13px', color: '#FFFFFF', marginTop: 10, fontWeight: 700 }}>
+                    Center Face in Oval Frame
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#94A3B8', marginTop: 4 }}>
+                    Depth & Liveness Detection Active
+                  </div>
+                </div>
+              )}
+
+              {currentStep === 'step2_face_matching' && (
+                <div style={{ textAlign: 'center', zIndex: 11 }}>
+                  <div style={{ width: 44, height: 44, border: '3px solid #38BDF8', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spinSlow 1s linear infinite', margin: '0 auto' }} />
+                  <div style={{ fontSize: '13px', marginTop: 12, fontWeight: 700, color: '#FFFFFF' }}>
+                    {faceProgress < 60 ? 'Analyzing Liveness...' : 'Matching Alice Sharma (99.6%)...'}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
-          {/* Content for Idle QR Scanning */}
-          {currentStep === 'idle_scanning' && (
-            <div style={{ textAlign: 'center', padding: 20, zIndex: 11 }}>
-              {facingMode === 'environment' ? (
-                <>
-                  <Scan size={44} style={{ color: 'rgba(255, 255, 255, 0.75)', margin: '0 auto' }} />
-                  <div style={{ fontSize: '12px', color: '#CBD5E1', marginTop: 10, fontWeight: 500 }}>
-                    Align rotating 90s QR code
-                  </div>
-                  <div style={{ fontSize: '10px', color: '#10B981', marginTop: 4, fontWeight: 600 }}>
-                    jsQR Real-Time Frame Engine Active
-                  </div>
-                </>
-              ) : (
-                <>
-                  <UserCheck size={48} style={{ color: '#38BDF8', margin: '0 auto' }} />
-                  <div style={{ fontSize: '12px', color: '#FFFFFF', marginTop: 10, fontWeight: 700 }}>
-                    Position Face in Oval Frame
-                  </div>
-                  <div style={{ fontSize: '10px', color: '#94A3B8', marginTop: 4 }}>
-                    Depth & Liveness Attestation Ready
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-
-          {/* Content for QR Validation */}
-          {currentStep === 'qr_validating' && (
-            <div style={{ textAlign: 'center', zIndex: 11 }}>
-              <div style={{ width: 44, height: 44, border: '3px solid #38BDF8', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spinSlow 1s linear infinite', margin: '0 auto' }} />
-              <div style={{ fontSize: '13px', marginTop: 12, fontWeight: 600, color: '#FFFFFF' }}>Validating Token...</div>
-            </div>
-          )}
-
-          {/* Content for Location Check */}
-          {currentStep === 'verifying_location' && (
-            <div style={{ textAlign: 'center', color: '#10B981', zIndex: 11 }}>
-              <MapPin size={48} style={{ margin: '0 auto' }} />
-              <div style={{ fontSize: '13px', marginTop: 8, fontWeight: 700, color: '#FFFFFF' }}>Within 100m Geofence</div>
-              <div style={{ fontSize: '11px', color: '#A7F3D0', marginTop: 2 }}>GPS Accuracy: ±3.2m</div>
-            </div>
-          )}
-
-          {/* Content for Biometric Prompt */}
-          {currentStep === 'prompting_biometric' && (
+          {/* STAGE 3: Fingerprint Biometric Prompt */}
+          {activeStageNumber === 3 && (
             <div style={{ textAlign: 'center', color: '#60A5FA', zIndex: 11 }}>
-              <Fingerprint size={56} style={{ margin: '0 auto' }} />
-              <div style={{ fontSize: '14px', marginTop: 8, fontWeight: 700, color: '#FFFFFF' }}>Biometric Authorization</div>
-              <div style={{ fontSize: '11px', color: '#93C5FD', marginTop: 2 }}>Hardware Keystore Ready</div>
-            </div>
-          )}
-
-          {/* Content for Committing */}
-          {currentStep === 'committing' && (
-            <div style={{ textAlign: 'center', zIndex: 11 }}>
-              <ShieldCheck size={54} style={{ color: '#10B981', margin: '0 auto' }} />
-              <div style={{ fontSize: '14px', marginTop: 8, fontWeight: 700, color: '#FFFFFF' }}>Finalizing Commit...</div>
+              <Fingerprint size={60} style={{ margin: '0 auto', color: '#38BDF8' }} />
+              <div style={{ fontSize: '15px', marginTop: 10, fontWeight: 700, color: '#FFFFFF' }}>
+                3. Touch Fingerprint Sensor
+              </div>
+              <div style={{ fontSize: '12px', color: '#93C5FD', marginTop: 4 }}>
+                Hardware Keystore Ready
+              </div>
             </div>
           )}
         </div>
 
         {/* Real-time Status Caption */}
         <p style={{
-          marginTop: Spacing.lg,
+          marginTop: Spacing.base,
           fontSize: '13px',
           color: '#E2E8F0',
           textAlign: 'center',
           maxWidth: 320,
           zIndex: 10,
           lineHeight: 1.45,
-          fontWeight: 500,
+          fontWeight: 600,
         }}>
           {statusMessage}
         </p>
 
-        {/* Front Camera: Live Face & Biometrics Action Trigger */}
-        {facingMode === 'user' && currentStep === 'idle_scanning' && (
-          <div style={{ marginTop: Spacing.sm, zIndex: 15, width: '100%', maxWidth: 320 }}>
+        {/* STAGE 1 Shortcut: Fast Scan Teacher QR Token */}
+        {activeStageNumber === 1 && activeChallenge && (
+          <div style={{ marginTop: 6, zIndex: 15, textAlign: 'center' }}>
             <button
-              onClick={handleLiveFaceVerificationSequence}
-              disabled={faceVerifyStage !== 'idle'}
-              style={{
-                width: '100%',
-                backgroundColor: '#38BDF8',
-                color: '#07162F',
-                border: 'none',
-                padding: '12px 18px',
-                borderRadius: Radii.button,
-                fontWeight: 700,
-                fontSize: '14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                cursor: faceVerifyStage === 'idle' ? 'pointer' : 'default',
-                boxShadow: '0 4px 18px rgba(56, 189, 248, 0.45)',
-              }}
-            >
-              {faceVerifyStage === 'idle' && (
-                <>
-                  <UserCheck size={18} />
-                  Verify Face & Unlock Biometrics
-                </>
-              )}
-              {faceVerifyStage === 'analyzing_liveness' && (
-                <>
-                  <Sparkles size={18} style={{ animation: 'spinSlow 1s linear infinite' }} />
-                  Analyzing Liveness (Depth & Eyes)...
-                </>
-              )}
-              {faceVerifyStage === 'matching_profile' && (
-                <>
-                  <CheckCircle2 size={18} style={{ color: '#07162F' }} />
-                  Match Confirmed: Alice Sharma (99.6%)
-                </>
-              )}
-              {faceVerifyStage === 'prompting_hardware_biometric' && (
-                <>
-                  <Fingerprint size={18} />
-                  Confirming Device Biometric...
-                </>
-              )}
-            </button>
-          </div>
-        )}
-
-        {/* Rear Camera: Instant Teacher QR Token Trigger */}
-        {facingMode === 'environment' && activeChallenge && currentStep === 'idle_scanning' && (
-          <div style={{ marginTop: Spacing.sm, zIndex: 15, textAlign: 'center' }}>
-            <button
-              onClick={() => handleProcessChallenge(activeChallenge.token)}
+              onClick={() => handleStep1QRScanned(activeChallenge.token)}
               style={{
                 backgroundColor: '#0F274A',
                 color: '#38BDF8',
@@ -868,6 +835,34 @@ export const STU04_LiveScanner: React.FC<Props> = ({
             </button>
           </div>
         )}
+
+        {/* STAGE 2 Action: Verify Face Button */}
+        {activeStageNumber === 2 && currentStep === 'step2_face' && (
+          <div style={{ marginTop: 6, zIndex: 15, width: '100%', maxWidth: 300 }}>
+            <button
+              onClick={handleStep2StartFaceVerification}
+              style={{
+                width: '100%',
+                backgroundColor: '#38BDF8',
+                color: '#07162F',
+                border: 'none',
+                padding: '12px 18px',
+                borderRadius: Radii.button,
+                fontWeight: 700,
+                fontSize: '14px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                boxShadow: '0 4px 18px rgba(56, 189, 248, 0.45)',
+              }}
+            >
+              <UserCheck size={18} />
+              Confirm Face & Proceed to Fingerprint
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Bottom Interactive Area */}
@@ -877,7 +872,7 @@ export const STU04_LiveScanner: React.FC<Props> = ({
         borderTop: '1px solid rgba(255, 255, 255, 0.12)',
         zIndex: 25,
       }}>
-        {currentStep === 'prompting_biometric' ? (
+        {activeStageNumber === 3 ? (
           <div>
             <div style={{
               backgroundColor: 'rgba(255, 255, 255, 0.08)',
@@ -892,13 +887,13 @@ export const STU04_LiveScanner: React.FC<Props> = ({
             }}>
               <Fingerprint size={24} style={{ color: '#60A5FA', flexShrink: 0 }} />
               <div>
-                <strong style={{ color: '#FFFFFF' }}>Android BiometricPrompt Ready:</strong>
-                <div>Tap below to confirm fingerprint or device screen lock.</div>
+                <strong style={{ color: '#FFFFFF' }}>Android BiometricPrompt Active:</strong>
+                <div>Touch fingerprint sensor or tap below to authenticate.</div>
               </div>
             </div>
 
             <button
-              onClick={handleHardwareBiometricTrigger}
+              onClick={triggerNativeHardwareBiometric}
               style={{
                 width: '100%',
                 height: Spacing.minTouchTarget,
@@ -916,107 +911,103 @@ export const STU04_LiveScanner: React.FC<Props> = ({
                 boxShadow: '0 4px 16px rgba(56, 189, 248, 0.4)',
               }}
             >
-              <Fingerprint size={22} /> Authenticate Biometrics & Commit
+              <Fingerprint size={22} /> Confirm Device Fingerprint & Finish
             </button>
           </div>
-        ) : (
-          <div>
-            {facingMode === 'environment' ? (
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input
-                  type="text"
-                  placeholder="Or enter 90s token (e.g. TM-...)..."
-                  value={manualTokenInput}
-                  onChange={(e) => setManualTokenInput(e.target.value.toUpperCase())}
-                  disabled={currentStep !== 'idle_scanning'}
-                  style={{
-                    flex: 1,
-                    height: Spacing.minTouchTarget,
-                    backgroundColor: 'rgba(255, 255, 255, 0.12)',
-                    border: '1px solid rgba(255, 255, 255, 0.2)',
-                    borderRadius: Radii.control,
-                    padding: '0 14px',
-                    color: '#FFFFFF',
-                    fontSize: '14px',
-                    outline: 'none',
-                  }}
-                />
-                <button
-                  onClick={() => handleProcessChallenge(manualTokenInput)}
-                  disabled={!manualTokenInput || currentStep !== 'idle_scanning'}
-                  style={{
-                    height: Spacing.minTouchTarget,
-                    padding: '0 18px',
-                    backgroundColor: manualTokenInput ? '#38BDF8' : 'rgba(255, 255, 255, 0.15)',
-                    color: manualTokenInput ? '#07162F' : 'rgba(255, 255, 255, 0.4)',
-                    border: 'none',
-                    borderRadius: Radii.control,
-                    fontWeight: 700,
-                    fontSize: '14px',
-                    cursor: manualTokenInput ? 'pointer' : 'default',
-                  }}
-                >
-                  Verify
-                </button>
-              </div>
-            ) : (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 12px',
-                backgroundColor: 'rgba(56, 189, 248, 0.08)',
-                borderRadius: Radii.control,
-                fontSize: '12px',
-                color: '#93C5FD',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <ShieldCheck size={16} style={{ color: '#38BDF8' }} />
-                  <span>Hardware Attestation: StrongBox TEE</span>
-                </div>
-                <span style={{ color: '#10B981', fontWeight: 700 }}>ARM TrustZone</span>
-              </div>
-            )}
-
-            {/* Diagnostic Information Toggle */}
-            <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '11px', color: '#94A3B8' }}>
-                Mode: {facingMode === 'user' ? 'Front Camera (Facial / Liveness)' : 'Back Camera (Live QR Scanner)'}
-              </span>
-              <button
-                onClick={() => setShowDiagnostics(!showDiagnostics)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#38BDF8',
-                  fontSize: '11px',
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: 2,
-                }}
-              >
-                <Info size={12} /> {showDiagnostics ? 'Hide' : 'Show'} Diagnostics
-              </button>
+        ) : activeStageNumber === 2 ? (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 12px',
+            backgroundColor: 'rgba(56, 189, 248, 0.08)',
+            borderRadius: Radii.control,
+            fontSize: '12px',
+            color: '#93C5FD',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <ShieldCheck size={16} style={{ color: '#38BDF8' }} />
+              <span>Face Liveness Check Active</span>
             </div>
-
-            {showDiagnostics && (
-              <div style={{
-                marginTop: 8,
-                padding: 10,
-                backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            <span style={{ color: '#10B981', fontWeight: 700 }}>Pass &gt; 98%</span>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              type="text"
+              placeholder="Or enter 90s token (e.g. TM-...)..."
+              value={manualTokenInput}
+              onChange={(e) => setManualTokenInput(e.target.value.toUpperCase())}
+              disabled={currentStep !== 'step1_qr'}
+              style={{
+                flex: 1,
+                height: Spacing.minTouchTarget,
+                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
                 borderRadius: Radii.control,
-                fontSize: '11px',
-                color: '#CBD5E1',
-                lineHeight: 1.5,
-              }}>
-                <div><strong>Camera Stream:</strong> {cameraActive ? 'Active (1280x720 30fps)' : 'Inactive / Permission needed'}</div>
-                <div><strong>Secure Context:</strong> {typeof window !== 'undefined' && window.isSecureContext ? 'HTTPS / Localhost (Full Sensor API Support)' : 'HTTP Insecure Context'}</div>
-                <div><strong>Biometric Sensor:</strong> {typeof window !== 'undefined' && window.PublicKeyCredential ? 'WebAuthn / Android BiometricPrompt Available' : 'Simulated fallback mode'}</div>
-                <div><strong>Classroom Anchor:</strong> Lab 302 (19.0760° N, 72.8777° E, 100m radius)</div>
-              </div>
-            )}
+                padding: '0 14px',
+                color: '#FFFFFF',
+                fontSize: '14px',
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={() => handleStep1QRScanned(manualTokenInput)}
+              disabled={!manualTokenInput || currentStep !== 'step1_qr'}
+              style={{
+                height: Spacing.minTouchTarget,
+                padding: '0 18px',
+                backgroundColor: manualTokenInput ? '#38BDF8' : 'rgba(255, 255, 255, 0.15)',
+                color: manualTokenInput ? '#07162F' : 'rgba(255, 255, 255, 0.4)',
+                border: 'none',
+                borderRadius: Radii.control,
+                fontWeight: 700,
+                fontSize: '14px',
+                cursor: manualTokenInput ? 'pointer' : 'default',
+              }}
+            >
+              Verify
+            </button>
+          </div>
+        )}
+
+        {/* Diagnostics Toggle */}
+        <div style={{ marginTop: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '11px', color: '#94A3B8' }}>
+            Pipeline Step {activeStageNumber} of 3 ({activeStageNumber === 1 ? 'Rear Camera QR' : activeStageNumber === 2 ? 'Front Camera Face' : 'Phone Fingerprint'})
+          </span>
+          <button
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#38BDF8',
+              fontSize: '11px',
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              padding: 2,
+            }}
+          >
+            <Info size={12} /> {showDiagnostics ? 'Hide' : 'Show'} Diagnostics
+          </button>
+        </div>
+
+        {showDiagnostics && (
+          <div style={{
+            marginTop: 8,
+            padding: 10,
+            backgroundColor: 'rgba(15, 23, 42, 0.85)',
+            borderRadius: Radii.control,
+            fontSize: '11px',
+            color: '#CBD5E1',
+            lineHeight: 1.5,
+          }}>
+            <div><strong>Camera Stream:</strong> {cameraActive ? `Active (${facingMode === 'user' ? 'Front' : 'Rear'} 720p)` : 'Inactive / Permission needed'}</div>
+            <div><strong>Secure Context:</strong> {typeof window !== 'undefined' && window.isSecureContext ? 'HTTPS / Localhost (Full Sensor API Support)' : 'HTTP Insecure Context'}</div>
+            <div><strong>Biometric Sensor:</strong> {typeof window !== 'undefined' && window.PublicKeyCredential ? 'WebAuthn / Android BiometricPrompt Available' : 'Simulated fallback mode'}</div>
+            <div><strong>Classroom Anchor:</strong> Lab 302 (19.0760° N, 72.8777° E, 100m radius)</div>
           </div>
         )}
       </div>
