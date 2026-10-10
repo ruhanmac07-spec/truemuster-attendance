@@ -17,31 +17,44 @@ export const ManualExceptionDialog: React.FC<Props> = ({ sessionId, onClose, onS
   const [justification, setJustification] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      const record: AttendanceRecord = {
-        id: 'rec-manual-' + Date.now(),
-        sessionId,
-        studentId,
-        studentName,
-        enrollmentId,
-        courseCode: 'CS401',
-        courseName: 'Distributed Systems & Cloud Computing',
-        sessionDate: new Date().toISOString().split('T')[0],
-        status: 'present',
-        verificationMethod: 'teacher_manual_override',
-        verifiedAt: new Date().toISOString(),
-        overrideReason: `[${reasonCategory.toUpperCase()}] ${justification}`,
-        overrideBy: 'Prof. K. Rao (Teacher)',
-      };
+    try {
+      await fetch('/api/records/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId,
+          studentId,
+          newStatus: 'present',
+          reasonCategory,
+          reasonText: justification,
+          teacherId: 'tch-prof-rao',
+        }),
+      });
+    } catch (err) {}
 
-      TrueMusterStore.markAttendance(record);
-      setIsSubmitting(false);
-      onSuccess();
-    }, 600);
+    const record: AttendanceRecord = {
+      id: 'rec-manual-' + Date.now(),
+      sessionId,
+      studentId,
+      studentName,
+      enrollmentId,
+      courseCode: 'CS401',
+      courseName: 'Distributed Systems & Cloud Computing',
+      sessionDate: new Date().toISOString().split('T')[0],
+      status: 'present',
+      verificationMethod: 'teacher_manual_override',
+      verifiedAt: new Date().toISOString(),
+      overrideReason: `[${reasonCategory.toUpperCase()}] ${justification}`,
+      overrideBy: 'Prof. K. Rao (Teacher)',
+    };
+
+    TrueMusterStore.markAttendance(record);
+    setIsSubmitting(false);
+    onSuccess();
   };
 
   return (

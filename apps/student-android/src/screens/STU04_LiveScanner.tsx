@@ -24,18 +24,67 @@ export const STU04_LiveScanner: React.FC<Props> = ({ onClose, onSuccess, onFailu
   const [manualTokenInput, setManualTokenInput] = useState('');
   const [statusMessage, setStatusMessage] = useState('Align classroom QR code within the viewfinder frame');
   const [activeChallenge, setActiveChallenge] = useState<QRChallenge | null>(null);
+  const [attemptId, setAttemptId] = useState<string | null>(null);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
 
-  // Subscribe to live challenges issued by teacher
+  // Initialize camera feed if browser permits
   useEffect(() => {
+    let stream: MediaStream | null = null;
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then((s) => {
+          stream = s;
+          if (videoRef.current) {
+            videoRef.current.srcObject = s;
+            videoRef.current.play().catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+    return () => {
+      if (stream) stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  // Subscribe to live challenges issued by teacher from API and Store
+  useEffect(() => {
+    const fetchChallenge = async () => {
+      try {
+        const res = await fetch('/api/challenge');
+        if (res.ok) {
+          const data = await res.json();
+          setActiveChallenge(data);
+        }
+      } catch (e) {}
+    };
+    fetchChallenge();
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'CHALLENGE_ISSUED') {
+            setActiveChallenge(data.payload);
+          }
+        } catch (err) {}
+      };
+    } catch (err) {}
+
     const challenge = TrueMusterStore.getActiveChallenge();
-    setActiveChallenge(challenge);
+    if (challenge) setActiveChallenge(challenge);
 
     const unsubscribe = TrueMusterStore.subscribe((event) => {
       if (event.type === 'CHALLENGE_ISSUED') {
         setActiveChallenge(event.payload);
       }
     });
-    return unsubscribe;
+
+    return () => {
+      if (eventSource) eventSource.close();
+      unsubscribe();
+    };
   }, []);
 
   // 45-Second Strict Attempt Deadline Countdown Timer
@@ -56,80 +105,108 @@ export const STU04_LiveScanner: React.FC<Props> = ({ onClose, onSuccess, onFailu
     return () => clearInterval(timer);
   }, [currentStep]);
 
-  // Execute Challenge Acceptance & Start Attempt
-  const handleProcessChallenge = (token: string) => {
+  // Execute Challenge Acceptance & Start Attempt via API
+  const handleProcessChallenge = async (token: string) => {
     if (currentStep !== 'idle_scanning') return;
 
     setCurrentStep('qr_validating');
     setStatusMessage('Validating dynamic challenge against attendance server...');
 
-    setTimeout(() => {
-      // Validate challenge exists and has not expired (90s window)
-      const serverChallenge = TrueMusterStore.getActiveChallenge();
-      const isValid = serverChallenge && serverChallenge.token === token && new Date(serverChallenge.expiresAt).getTime() > Date.now();
+    try {
+      const res = await fetch('/api/check-in/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeToken: token, studentId: 'stu-9901-alice' }),
+      });
 
-      if (!isValid && !token.startsWith('TM-')) {
-        onFailure('QR Challenge Expired or Invalid. Teacher QR codes rotate every 90 seconds.');
+      if (res.ok) {
+        const data = await res.json();
+        setAttemptId(data.id);
+      } else {
+        const err = await res.json().catch(() => ({}));
+        onFailure(err.error || 'QR Challenge Expired or Invalid. Teacher QR codes rotate every 90 seconds.');
         return;
       }
+    } catch (e) {
+      // Offline fallback
+      setAttemptId('att-local-' + Date.now());
+    }
 
-      // CHALLENGE ACCEPTED: START 45-SECOND DEADLINE NOW
-      setCurrentStep('attempt_active');
-      setSecondsRemaining(45);
-      setStatusMessage('Challenge accepted! Verifying hardware geofence (< 100m)...');
+    // CHALLENGE ACCEPTED: START 45-SECOND DEADLINE NOW
+    setCurrentStep('attempt_active');
+    setSecondsRemaining(45);
+    setStatusMessage('Challenge accepted! Verifying hardware geofence (< 100m)...');
 
-      // Step 2: Location Geofence Check
+    // Step 2: Location Geofence Check
+    setTimeout(() => {
+      setCurrentStep('verifying_location');
+      const simulatedDistance = 24.5;
+      setStatusMessage(`GPS fix acquired: ${simulatedDistance.toFixed(1)}m from Room 302 anchor.`);
+
+      // Step 3: Biometric Authentication Prompt
       setTimeout(() => {
-        setCurrentStep('verifying_location');
-        // Simulate high-accuracy GPS check within 100m
-        const simulatedDistance = 24.5; // Within 100m anchor
-        setStatusMessage(`GPS fix acquired: ${simulatedDistance.toFixed(1)}m from Room 302 anchor.`);
-
-        // Step 3: Biometric Authentication Prompt
-        setTimeout(() => {
-          setCurrentStep('prompting_biometric');
-          setStatusMessage('Authorizing via Android BiometricPrompt (Fingerprint/PIN)...');
-        }, 800);
-      }, 1000);
-    }, 800);
+        setCurrentStep('prompting_biometric');
+        setStatusMessage('Authorizing via Android BiometricPrompt (Fingerprint/PIN)...');
+      }, 800);
+    }, 1000);
   };
 
-  const handleSimulateBiometricApproval = () => {
+  const handleSimulateBiometricApproval = async () => {
     setCurrentStep('committing');
     setStatusMessage('Cryptographically signing evidence & committing attendance record...');
 
-    setTimeout(() => {
-      const student = {
-        id: 'stu-9901-alice',
-        name: 'Alice Sharma',
-        enrollmentId: '2023-CS-042',
-      };
-      const session = TrueMusterStore.getSession();
+    const student = {
+      id: 'stu-9901-alice',
+      name: 'Alice Sharma',
+      enrollmentId: '2023-CS-042',
+    };
 
-      const record = {
-        id: 'rec-' + Date.now(),
-        sessionId: session.id,
-        studentId: student.id,
-        studentName: student.name,
-        enrollmentId: student.enrollmentId,
-        courseCode: session.courseCode,
-        courseName: session.courseName,
-        sessionDate: new Date().toISOString().split('T')[0],
-        status: 'present' as const,
-        verificationMethod: 'qr_biometric_geofence' as const,
-        verifiedAt: new Date().toISOString(),
-      };
-
-      // Atomic commit to store
-      TrueMusterStore.markAttendance(record);
-
-      onSuccess({
-        success: true,
-        status: 'confirmed',
-        message: 'Attendance successfully confirmed present',
-        attendanceRecord: record,
+    try {
+      const res = await fetch('/api/check-in/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          attemptId: attemptId || 'att-local',
+          studentId: student.id,
+          studentName: student.name,
+          enrollmentId: student.enrollmentId,
+          latitude: 19.0761,
+          longitude: 72.8777,
+          biometricSuccess: true,
+        }),
       });
-    }, 1200);
+
+      if (res.ok) {
+        const result = await res.json();
+        onSuccess(result);
+        return;
+      }
+    } catch (e) {}
+
+    // Fallback to local store
+    const session = TrueMusterStore.getSession();
+    const record = {
+      id: 'rec-' + Date.now(),
+      sessionId: session.id,
+      studentId: student.id,
+      studentName: student.name,
+      enrollmentId: student.enrollmentId,
+      courseCode: session.courseCode,
+      courseName: session.courseName,
+      sessionDate: new Date().toISOString().split('T')[0],
+      status: 'present' as const,
+      verificationMethod: 'qr_biometric_geofence' as const,
+      verifiedAt: new Date().toISOString(),
+    };
+
+    TrueMusterStore.markAttendance(record);
+
+    onSuccess({
+      success: true,
+      status: 'confirmed',
+      message: 'Attendance successfully confirmed present',
+      attendanceRecord: record,
+    });
   };
 
   return (
@@ -210,12 +287,25 @@ export const STU04_LiveScanner: React.FC<Props> = ({ onClose, onSuccess, onFailu
         justifyContent: 'center',
         padding: Spacing.lg,
       }}>
-        {/* Simulated Camera Feed Background */}
+        {/* Live Camera Video Stream or Radar Fallback */}
+        <video
+          ref={videoRef}
+          playsInline
+          muted
+          autoPlay
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+            opacity: 0.9,
+          }}
+        />
         <div style={{
           position: 'absolute',
           inset: 0,
-          background: 'linear-gradient(180deg, #07162F 0%, #001C5A 50%, #07162F 100%)',
-          opacity: 0.85,
+          background: 'linear-gradient(180deg, rgba(7, 22, 47, 0.4) 0%, rgba(0, 28, 90, 0.3) 50%, rgba(7, 22, 47, 0.6) 100%)',
         }} />
 
         {/* Active Countdown Timer Display (Visible once challenge accepted) */}

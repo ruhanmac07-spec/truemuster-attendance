@@ -20,24 +20,61 @@ export const QRProjectionScreen: React.FC<Props> = ({
   const [challenge, setChallenge] = useState<QRChallenge | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(90);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mobileCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const rotateChallenge = () => {
+  const mobileUrl = `http://${window.location.hostname === 'localhost' ? '10.68.156.165' : window.location.hostname}:5173`;
+
+  const rotateChallenge = async () => {
+    try {
+      const res = await fetch('/api/challenge', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        setChallenge(data);
+        setSecondsLeft(90);
+        return;
+      }
+    } catch (e) {}
     const newChl = TrueMusterStore.issueNewChallenge(session.id);
     setChallenge(newChl);
     setSecondsLeft(90);
   };
 
-  // Initialize or fetch challenge
+  // Initialize or fetch challenge from server
   useEffect(() => {
-    let current = TrueMusterStore.getActiveChallenge();
-    if (!current || new Date(current.expiresAt).getTime() <= Date.now()) {
-      current = TrueMusterStore.issueNewChallenge(session.id);
-    }
-    setChallenge(current);
+    const fetchChallenge = async () => {
+      try {
+        const res = await fetch('/api/challenge');
+        if (res.ok) {
+          const data = await res.json();
+          setChallenge(data);
+          const diff = Math.max(0, Math.floor((new Date(data.expiresAt).getTime() - Date.now()) / 1000));
+          setSecondsLeft(diff);
+          return;
+        }
+      } catch (e) {}
 
-    const diff = Math.max(0, Math.floor((new Date(current.expiresAt).getTime() - Date.now()) / 1000));
-    setSecondsLeft(diff);
+      let current = TrueMusterStore.getActiveChallenge();
+      if (!current || new Date(current.expiresAt).getTime() <= Date.now()) {
+        current = TrueMusterStore.issueNewChallenge(session.id);
+      }
+      setChallenge(current);
+      const diff = Math.max(0, Math.floor((new Date(current.expiresAt).getTime() - Date.now()) / 1000));
+      setSecondsLeft(diff);
+    };
+
+    fetchChallenge();
   }, [session.id]);
+
+  // Render Mobile Access QR
+  useEffect(() => {
+    if (mobileCanvasRef.current) {
+      QRCode.toCanvas(mobileCanvasRef.current, mobileUrl, {
+        width: 140,
+        margin: 1,
+        color: { dark: '#001C5A', light: '#FFFFFF' },
+      });
+    }
+  }, [mobileUrl]);
 
   // Render QR Canvas whenever challenge changes
   useEffect(() => {
@@ -171,23 +208,110 @@ export const QRProjectionScreen: React.FC<Props> = ({
           {session.section} · {session.roomNumber} · 100m Geofence Anchor Active
         </p>
 
-        {/* Big QR Code Canvas */}
+        {/* QR Displays Grid */}
         <div style={{
           marginTop: Spacing.xl,
-          padding: 16,
-          display: 'inline-block',
-          backgroundColor: '#FFFFFF',
-          borderRadius: Radii.card,
-          border: `2px solid ${Colors.brandNavy}`,
-          boxShadow: '0 4px 20px rgba(0, 28, 90, 0.12)',
+          display: 'flex',
+          justifyContent: 'center',
+          gap: 32,
+          flexWrap: 'wrap',
         }}>
-          <canvas ref={canvasRef} style={{ display: 'block' }} />
+          {/* Step 1: Open on Mobile Phone */}
+          <div style={{
+            padding: '20px 24px',
+            backgroundColor: '#F8FAFC',
+            borderRadius: Radii.card,
+            border: `1px solid ${Colors.borderDefault}`,
+            maxWidth: 240,
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 700,
+              color: Colors.brandNavy,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: 8,
+            }}>
+              Step 1: Open on Phone
+            </div>
+            <div style={{
+              padding: 8,
+              backgroundColor: '#FFFFFF',
+              borderRadius: Radii.control,
+              display: 'inline-block',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+            }}>
+              <canvas ref={mobileCanvasRef} style={{ display: 'block' }} />
+            </div>
+            <div style={{ fontSize: '12px', color: Colors.textSecondary, marginTop: 8 }}>
+              Scan with phone camera or visit:
+            </div>
+            <a
+              href={mobileUrl}
+              target="_blank"
+              rel="noreferrer"
+              style={{
+                fontSize: '12px',
+                fontWeight: 600,
+                color: '#2563EB',
+                display: 'block',
+                marginTop: 2,
+                wordBreak: 'break-all',
+              }}
+            >
+              {mobileUrl}
+            </a>
+          </div>
+
+          {/* Step 2: Main Rotating Attendance Challenge */}
+          <div style={{
+            padding: '20px 24px',
+            backgroundColor: '#FFFFFF',
+            borderRadius: Radii.card,
+            border: `2px solid ${Colors.brandNavy}`,
+            boxShadow: '0 8px 24px rgba(0, 28, 90, 0.12)',
+            maxWidth: 360,
+            textAlign: 'center',
+          }}>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 700,
+              color: Colors.brandRed,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              marginBottom: 8,
+            }}>
+              Step 2: Scan Session QR
+            </div>
+            <div style={{
+              padding: 12,
+              backgroundColor: '#FFFFFF',
+              borderRadius: Radii.control,
+              display: 'inline-block',
+            }}>
+              <canvas ref={canvasRef} style={{ display: 'block' }} />
+            </div>
+
+            <div style={{
+              marginTop: 12,
+              fontSize: '13px',
+              fontFamily: 'monospace',
+              fontWeight: 700,
+              color: Colors.brandNavy,
+              backgroundColor: Colors.brandBlueSoft,
+              padding: '6px 12px',
+              borderRadius: Radii.control,
+            }}>
+              TOKEN: {challenge?.token || 'GENERATING...'}
+            </div>
+          </div>
         </div>
 
         {/* Dynamic Rotation & Expiry Bar */}
         <div style={{
           marginTop: Spacing.lg,
-          maxWidth: 420,
+          maxWidth: 480,
           margin: '24px auto 0',
           backgroundColor: Colors.surfaceCanvas,
           padding: '12px 18px',

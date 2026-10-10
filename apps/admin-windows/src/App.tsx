@@ -18,6 +18,35 @@ export default function App() {
   const [records, setRecords] = useState<AttendanceRecord[]>(TrueMusterStore.getRecords(session.id));
 
   useEffect(() => {
+    const fetchInitial = async () => {
+      try {
+        const res = await fetch('/api/session');
+        if (res.ok) {
+          const s = await res.json();
+          setSession(s);
+        }
+        const recRes = await fetch('/api/records');
+        if (recRes.ok) {
+          const r = await recRes.json();
+          setRecords(r);
+        }
+      } catch (err) {}
+    };
+    fetchInitial();
+
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = (e) => {
+        try {
+          const data = JSON.parse(e.data);
+          if (data.type === 'ATTENDANCE_COMMITTED' || data.type === 'ATTENDANCE_OVERRIDDEN') {
+            fetchInitial();
+          }
+        } catch (err) {}
+      };
+    } catch (err) {}
+
     const unsubscribe = TrueMusterStore.subscribe((event) => {
       if (event.type === 'SESSION_UPDATED') {
         setSession(event.payload);
@@ -27,7 +56,11 @@ export default function App() {
         }
       }
     });
-    return unsubscribe;
+
+    return () => {
+      if (eventSource) eventSource.close();
+      unsubscribe();
+    };
   }, [session.id]);
 
   const totalPresent = records.filter(r => r.status === 'present').length;
