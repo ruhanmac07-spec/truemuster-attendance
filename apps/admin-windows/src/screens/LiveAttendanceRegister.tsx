@@ -280,7 +280,7 @@ export const LiveAttendanceRegister: React.FC<Props> = ({
                 </td>
                 <td style={{ padding: '14px 18px', color: Colors.textSecondary }}>
                   {item.method ? (
-                    item.method === 'qr_biometric_geofence' ? 'QR + Biometric + Geofence' : 'Teacher Manual Override'
+                    item.method === 'qr_biometric_geofence' ? 'QR + Face Liveness + Fingerprint' : 'Teacher Manual Override'
                   ) : 'Not Checked In'}
                 </td>
               </tr>

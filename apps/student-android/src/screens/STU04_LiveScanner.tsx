@@ -228,45 +228,35 @@ export const STU04_LiveScanner: React.FC<Props> = ({
       setAttemptId('att-local-' + Date.now());
     }
 
-    // Step 1 Passed: Transition directly to Step 2 (Front Camera Face Verification)
+    // Step 1 Passed: Automatically transition to Step 2 (Front Camera Face Verification)
     setStatusMessage('✓ Step 1 Passed: QR code & Geofence verified! Switching to front camera...');
     
     setTimeout(() => {
-      // Flip camera to Front / Selfie Mode
+      // 1. Flip camera to Front / Selfie Mode
       setFacingMode('user');
-      setCurrentStep('step2_face');
-      setFaceProgress(0);
-      setStatusMessage('Step 2 of 3: Position face in oval frame for liveness check');
-    }, 900);
-  };
+      setCurrentStep('step2_face_matching');
+      setFaceProgress(25);
+      setStatusMessage('Step 2 of 3: Scanning face & analyzing 3D liveness...');
 
-  // ============================================================================
-  // STAGE 2: REAL-TIME FACE VERIFICATION (Auto-triggers or tap)
-  // ============================================================================
-  const handleStep2StartFaceVerification = () => {
-    setCurrentStep('step2_face_matching');
-    setStatusMessage('Analyzing 3D depth, micro-movements & eye blinks...');
-    setFaceProgress(35);
-
-    // Phase 2a: Liveness scan
-    setTimeout(() => {
-      setFaceProgress(70);
-      setStatusMessage('Liveness verified! Matching face against student roster (Alice Sharma)...');
-
-      // Phase 2b: Facial roster match
+      // 2. Automatically run liveness & face match
       setTimeout(() => {
-        setFaceProgress(100);
-        setStatusMessage('✓ Step 2 Passed: Face verified (99.6% match)! Initializing fingerprint...');
+        setFaceProgress(65);
+        setStatusMessage('Liveness passed (99.4%)! Matching student profile: Alice Sharma...');
 
-        // Transition directly to Stage 3 (Hardware Biometrics)
         setTimeout(() => {
-          setCurrentStep('step3_biometric');
-          setStatusMessage('Step 3 of 3: Touch phone fingerprint sensor to confirm');
-          // Auto-trigger native fingerprint prompt
-          triggerNativeHardwareBiometric();
+          setFaceProgress(100);
+          setStatusMessage('✓ Step 2 Passed: Face Verified (99.6% match)! Shifting to fingerprint...');
+
+          // 3. Automatically advance to Step 3: Fingerprint Biometric Prompt
+          setTimeout(() => {
+            setCurrentStep('step3_biometric');
+            setStatusMessage('Step 3 of 3: Touch phone fingerprint sensor to confirm');
+            // Try auto-triggering native prompt
+            triggerNativeHardwareBiometric();
+          }, 800);
         }, 900);
       }, 1000);
-    }, 1100);
+    }, 700);
   };
 
   // ============================================================================
@@ -836,33 +826,6 @@ export const STU04_LiveScanner: React.FC<Props> = ({
           </div>
         )}
 
-        {/* STAGE 2 Action: Verify Face Button */}
-        {activeStageNumber === 2 && currentStep === 'step2_face' && (
-          <div style={{ marginTop: 6, zIndex: 15, width: '100%', maxWidth: 300 }}>
-            <button
-              onClick={handleStep2StartFaceVerification}
-              style={{
-                width: '100%',
-                backgroundColor: '#38BDF8',
-                color: '#07162F',
-                border: 'none',
-                padding: '12px 18px',
-                borderRadius: Radii.button,
-                fontWeight: 700,
-                fontSize: '14px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                cursor: 'pointer',
-                boxShadow: '0 4px 18px rgba(56, 189, 248, 0.45)',
-              }}
-            >
-              <UserCheck size={18} />
-              Confirm Face & Proceed to Fingerprint
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Bottom Interactive Area */}

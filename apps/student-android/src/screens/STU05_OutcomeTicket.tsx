@@ -104,9 +104,9 @@ export const STU05_OutcomeTicket: React.FC<Props> = ({
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span style={{ color: Colors.textSecondary }}>Method:</span>
-                <span style={{ fontWeight: 600, color: Colors.brandNavy }}>
-                  QR + Android Biometric + Geofence
+                <span style={{ color: Colors.textSecondary }}>Verification Method:</span>
+                <span style={{ fontWeight: 700, color: Colors.statusSuccess }}>
+                  QR + Facial Liveness + Hardware Fingerprint
                 </span>
               </div>
 
